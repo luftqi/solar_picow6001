@@ -22,7 +22,7 @@ from simple import MQTTClient
 device = "6001"
 
 #wifi wait
-wifi_wait_time = 30
+wifi_wait_time = 60
 
 #pin
 global led
@@ -265,7 +265,7 @@ def pizero2on():
     while True :
         current_time = machine.RTC().datetime()
         nowtimestamp = time.mktime(time.localtime())
-        if int(current_time[4]) == sleep_hour and int(current_time[5]) == sleep_minute:     
+        if int(current_time[5]) >= pizero2_on and int(current_time[5]) <= pizero2_off:     
             #picow watchdog stop
             machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
             #picow watchdog stop
