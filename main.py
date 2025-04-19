@@ -1,4 +1,3 @@
-
 import network
 import socket
 import urequests
@@ -10,6 +9,7 @@ import struct
 import math
 import os
 import ina226
+import ujson
 from time import sleep
 from struct import unpack
 from machine import Pin, I2C ,UART ,Timer
@@ -17,53 +17,114 @@ from umodbus.serial import Serial
 from ota import OTAUpdater
 from simple import MQTTClient
 
+
+#device
+device = "6001"
+
+#wifi wait
+wifi_wait_time = 30
+
 #pin
 global led
 led = machine.Pin("LED", machine.Pin.OUT)
+led.on()
 
-
-pin_6 = Pin(6, mode=Pin.OUT)#WIFI & Camera
+pin_6 = Pin(6, mode=Pin.OUT)#PIZERO
 pin_7 = Pin(7, mode=Pin.OUT)#IV
 
-pin_6.on()
+    
+pin_6.on() #ON PIZERO啟動  OFF PIZERO關閉
 pin_7.off()
 
-print("Wait for Wifi 60 sec")
-time.sleep(10)#wait for Wifi turn on
-
+#ssid = b'LUFTQI'
+#password = b'82767419'
 
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
 wlan.config(pm = 0xa11140) # Diable powersave mode
+networks = wlan.scan()
 
-#wlan.ifconfig(('10.42.0.3', '255.255.255.0', '10.42.0.1', '1.1.1.1'))
+ssid = b'solarsdgs' 
+password = b'82767419'
+#ssid = b'Agromeans' 
+#password = b'90339756'
 
-ssid = 'LUFTQI' 
-password = '82767419'
+#MQTT publish
 
-#ssid = 'solarsdgs' 
-#password = '82767419'
+mqtt_server = '10.42.0.1'
 
-#solarsdgs_6001_MQTT
-def mqtt_init():
-    CLIENT_ID = "picow6001"
-    client = MQTTClient(CLIENT_ID, '192.168.50.229',user=b"solarsdgs6001",password=b"82767419",)
-    #client.set_callback(sub_cb)
-    client.connect(clean_session=False)
-    #client.subscribe('led')
+client_id = 'solarsdgs%s_1' %device
+topic_pub = b'pg_pa_pp'
+topic_sub = b'pizero2onoff'
+mqttuser=b"solarsdgs%s" %device
+mqttpassword=b"82767419"
+topic_msg = b''
+
+def mqtt_connect():
+    client = MQTTClient(client_id, mqtt_server,user = mqttuser,password =mqttpassword, keepalive=3600)
+    try:
+        client.connect()
+        client.set_callback(sub_cb)
+    except:
+        pass
+    
+    print('Connected to %s MQTT Broker'%(mqtt_server))
     return client
 
-"""     
+def reconnect():
+    print('Failed to connect to the MQTT Broker. Reconnecting...')
+    time.sleep(1)
+    try:
+        client = MQTTClient(client_id, mqtt_server,user = mqttuser,password =mqttpassword, keepalive=3600)
+        client.disconnect()
+        time.sleep(1)
+        client.connect()
+        client.set_callback(sub_cb)
+    except:
+        pass
+    print('Connected to %s MQTT Broker'%(mqtt_server))
+    return client
+
+
+#MQTT sub
 def sub_cb(topic, msg):
-    print((topic, msg))
-    if topic == b'led':
-        if msg == b'on':
-            led.on()
-        if msg == b'off':
-            led.off()
-"""
-"""
-#INA226
+    #print("New message on topic {}".format(topic.decode('utf-8')))
+    
+    msg = msg.decode('utf-8')
+    print(msg)
+    msg = msg.split('_')
+    
+    global pizero2_on
+    global pizero2_off
+
+    pizero2_on = int(msg[0])
+    pizero2_off = int(msg[1])#轉int
+    
+    #防止大小錯誤
+    if pizero2_on <= pizero2_off :
+        pass
+    else :
+        pizero2_off2 = pizero2_on
+        pizero2_on2 =pizero2_onf
+        pizero2_on = pizero2_on2
+        pizero2_off = pizero2_off2
+    
+    print("Recieve Pizero2on %d" % pizero2_on)
+    print("Recieve Pizero2off %d" % pizero2_off)
+    
+    f1 = open("pizero2on.txt", "w")
+    f1.write("%d" % pizero2_on)
+    f1.close()  
+    f2 = open("pizero2off.txt", "w")
+    f2.write("%d" % pizero2_off)
+    f2.close()
+    global msgg  #判斷MQTT是否傳輸成功  成功則刪除掉DATA資料
+    msgg = ""
+    print("len(megg) : %d" % len(msgg))
+    
+
+#======================================
+ 
 global SHUNT_OHMS
 
 SHUNT_OHMS = 0.1
@@ -77,12 +138,11 @@ if len(devices) == 0:
   print("No i2c device !")
 else:
   print('i2c devices found:', len(devices))
-
   for device in devices:
     print("I2C address: ", device)
 
 
-# ina226
+# read INA 226 dara
 def power_read():
     # Create current measuring object
     
@@ -125,24 +185,22 @@ def power_read():
     if ip <= 10:
         ip = 0 
     
-    pg = ig * vg
-    pa = ia * va
-    pp = ip * vp
+    pg = int(ig * vg)
+    pa = int(ia * va) #calibration 
+    pp = int(ip * vp)  
     
-    
-    print("Vg = %.3f" % vg ,", Ig = %.3f" % ig , ", Pg = %.2f" % pg)
-    print("Va = %.3f" % va ,", Ia = %.3f" % ia , ", Pa = %.2f" % pa)
-    print("Vp = %.3f" % vp ,", Ip = %.3f" % ip , ", Pp = %.2f" % pp)
+    print("Vg = %.3f" % vg ,", Ig = %.3f" % ig , ", Pg = %d" % pg)
+    print("Va = %.3f" % va ,", Ia = %.3f" % ia , ", Pa = %d" % pa)
+    print("Vp = %.3f" % vp ,", Ip = %.3f" % ip , ", Pp = %d" % pp)
     
     pin_7.off()
 
     return pg,pa,pp
-"""
 
 #NTP
 def set_time():
     # Get the external time reference
-    utime.sleep(3)
+    time.sleep(1)
     NTP_QUERY = bytearray(48)
     NTP_QUERY[0] = 0x1B
     addr = socket.getaddrinfo(host, 123)[0][-1]   
@@ -150,7 +208,7 @@ def set_time():
     time.sleep(1)
 
     try:
-        ss.settimeout(1)
+        ss.settimeout(10)
         res = ss.sendto(NTP_QUERY, addr)
         msg = ss.recv(48)
  
@@ -162,24 +220,26 @@ def set_time():
     tm = val - NTP_DELTA    
     t = time.gmtime(tm)
     #print (t[3])
-    t3 = t[3] + 8
+    #t3 = t[3] + 8 #Taiwan UTC+8???
+    t3 = t[3]
     t2 = t[2]
     if t3 >= 24 :
         t3 = t3 -24
         t2 = t2 +1
     else:
         t3 = t3
-
-    rtc.datetime((t[0],t[1],t2,t[6]+1,t3,t[4],t[5],0))
-
+    print(t)
+    machine.RTC().datetime((t[0],t[1],t2,t[6]+1,t3,t[4],t[5],0))
 
 #wifi connect
 def wifi_connect(ssid,password):    
     
     wlan.connect(ssid,password)    
-    wait = 60
+    wait = 100
     while wait > 0:
         if wlan.status() < 0 or wlan.status() >= 3:
+            print('network status:%d' % wlan.status()) 
+            time.sleep(1)
             break
         wait -= 1
         print('waiting for connection..%s' %wait)
@@ -195,154 +255,281 @@ def wifi_connect(ssid,password):
         ip=wlan.ifconfig()[0]
         print('IP: ', ip)
 
-
-
-#######################################main############################################
-pg = 2
-pa = 3
-pp = 5
-
-rtc = machine.RTC()
-NTP_DELTA = 2208988800
-host = "pool.ntp.org"
-
-#reset from 20:05
-sleep_hour = 19 
-sleep_minute = 30
-sleep_time = 36000
-reset_hour = 12
-reset_minute = 10
-
-
-#wifi connect
-time.sleep(0.5)
-try:
-    wifi_connect(ssid,password)
-    wdt = machine.WDT(timeout=8000)
-    wdt.feed()
-except OSError as e: 
-    print(e)
-    machine.reset()    
-
-#Set RTC
-time.sleep(0.5)
-wdt = machine.WDT(timeout=8000)
-try:
-    set_time()
-except OSError as e: 
-    print(e)
-    machine.reset()
-wdt.feed()
-
-#MQTT connect
-time.sleep(0.5)
-wdt = machine.WDT(timeout=8000)
-try:
-    client = mqtt_init()
-except OSError as e: 
-    print(e)
-    machine.reset()
-wdt.feed()
-
-
-#OTA
-firmware_url = f"https://github.com/luftqi/solar_picow6001/refs/heads/main/"
-ota_updater = OTAUpdater(firmware_url, "main.py")
-ota_updater.download_and_install_update_if_available()
-
-
-#Led toggle
-timer = Timer()
-def blink(timer):
-    led.toggle()
+def pizero2on():
     
-timer.init(freq = 2.5, mode=Timer.PERIODIC, callback=blink)
+    global msgg,pa,pg,pp
+    msgg = "11"
+             
+    print("Pizero2 start work!")
+    #publish MQTT message & reset data.txt               
+    while True :
+        current_time = machine.RTC().datetime()
+        nowtimestamp = time.mktime(time.localtime())
+        if int(current_time[4]) == sleep_hour and int(current_time[5]) == sleep_minute:     
+            #picow watchdog stop
+            machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+            #picow watchdog stop
+            #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+            #print(b"ping {}".format(current_time))
+            nowtimestamp = time.mktime(time.localtime())
+            pg =2
+            pa =2
+            pp =2
+            #pg ,pa ,pp= power_read()
+            print("Power data read done!!")
+            mqtt_message_in = "%s/%s/%s/%s" %(nowtimestamp,pg,pa,pp)   
+  
+            # wifi connect fail hard restart
+            if wlan.status() != 3:        
+                #picow watchdog stop
+                machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+                #picow2 watch dog stop2
+                #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+                print("Network offline")
+                pin_6.off()
+                time.sleep(1)
+                pin_6.on()                    
+                time.sleep(90)
+                print("network hard restart")                
+                wlan = network.WLAN(network.STA_IF)
+                wlan.active(True)
+                wlan.config(pm = 0xa11140) # Diable powersave mode
+                time.sleep(0.5)
+                wifi_connect(ssid,password)      
+ 
+            if 'data.txt' in os.listdir():  
+                with open('data.txt' , 'r' ,encoding = 'UTF-8') as f:
+                    old_data = f.read()
+                    print("Mqtt message in: %s" % mqtt_message_in)
+                    lea = len(old_data)
+                    new_data = '"'+old_data[1:(lea-1)]+mqtt_message_in+',"'
+                    #print(new_data)
+                    f.close()
+                    
+                with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
+                    f.write(new_data)
+                    try :
+                        client.publish(topic_pub, new_data)
+                        client.subscribe(topic_sub)
+                    except :
+                        pass
+                    
+                    print("Push mqtt done!!")                   
+                
+                print ("len(msgg) :%d "% len(msgg))  
+                    
+                if len(msgg)==0:     #test MQTT sucess than clear data                                                                
+                    with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
+                        f.write("")
+                        f.close()
+                        print("Data reset!!") 
+                        msgg =""
+                else :
+                        pass
+            else :
+                    with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
+                        f.write("")
+                        f.close()
+                        print("Data.txt create!!")
+                   
+        else:
+            break
+            #picow watchdog stop
+            machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+            #picow2 watch dog stop2
+            #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+            time.sleep(23)
 
 
-
-while True:
-    
-    current_time = rtc.datetime() 
-    timestamp = b"Ping{:02d} {:02d} {:02d} {:02d} {:02d} {:02d} {:02d} 0 ".format(current_time[0], current_time[1], current_time[2] , current_time[3] ,current_time[4], current_time[5], current_time[6])    
-    #print(b"ping {}".format(current_time))
-    print(timestamp)   
-    
-    #Sleep
-    if current_time[4] == sleep_hour and current_time[5] == sleep_minute:     
-        # Stop/disable the RP2040 watchdog timer
-        # 0x40058000 = WATCHDOG_CTRL register, bit 30 is the ENABLE bit
+def picosleepandrestart(current_time,sleep_time,ssid,password,reset_hour,resst_minute):
+    if int(current_time[4]) == sleep_hour and int(current_time[5]) == sleep_minute:     
+        #picow watchdog stop
         machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
-        print("start sleep") 
-        pin_6.off()
-        pin_7.off()
+        #picow2 watch dog stop2
+        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+        
+        pin_6.off()        
         timer.deinit()
         wlan.disconnect()
         wlan.active(False)
         wlan.deinit()
-        time.sleep(55)
-        
-        print("lightt sleep")
-                       
+        time.sleep(55)        
+        print("Start light sleep")
+
         #soft counter & sleep
-        i = 0
-        for i in range(1,sleep_time) :
+        for i in range(0,sleep_time) :
             i = i + 1
             time.sleep(1)
             print(i)
+            
             if i == sleep_time :
+                pin_6.off()
                 time.sleep(60)
                 print("wake up")                
                 wlan = network.WLAN(network.STA_IF)
                 wlan.active(True)
-                #wlan.ifconfig(('10.42.0.3', '255.255.255.0', '10.42.0.1', '1.1.1.1'))
+                wlan.config(pm = 0xa11140) # Diable powersave mode
                 time.sleep(0.5)
                 try:
                     wifi_connect(ssid,password)
-                    wdt = machine.WDT(timeout=8000)
-                    wdt.feed()
+                    print("Start wifi")
                 except OSError as e: 
                     print(e)
                     machine.reset()
                 
                 time.sleep(1)
-                wdt = machine.WDT(timeout=8000)
-                try:
-                    BLYNK = Blynk(blynk_auth, insecure=True)
-                    #BLYNK = Blynk(blynk_auth)
-                except OSError as e: 
-                    print(e) 
-                    time.sleep(5)
-                    machine.reset()
-                wdt.feed()
                 timer.init(freq = 2.5, mode=Timer.PERIODIC, callback=blink)
     
+    print("Restart test")
     #reset            
-    if current_time[4] == reset_hour and current_time[5] == reset_minute:   
+    if int(current_time[4]) == reset_hour and int(current_time[5]) == reset_minute:   
+        #picow watchdog stop
         machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        #picow2 watch dog stop2
+        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
         time.sleep(55)
-        machine.reset()
+        machine.reset() 
+
+
+#######################################main############################################
+        
+pg = 1
+pa = 1
+pp = 1
+old_data = "" 
+rtc = machine.RTC()
+NTP_DELTA = 2208988800
+host = "pool.ntp.org"
+
+#sleep from 19:00 to 18:00
+sleep_hour = 19 
+sleep_minute = 00
+sleep_time = 39600
+
+#reset at 12:10
+reset_hour = 12
+reset_minute = 10
+
+#Data reset test key
+msgg = "11"
+
+#PZERO2 on/off
+
+f1 = open("pizero2on.txt", "r")
+f2 = open("pizero2off.txt", "r")
+pizero2_on = int(f1.read())
+pizero2_off = int(f2.read()) 
+
+
+#Led toggle
+timer = Timer()
+def blink(timer):
+    led.toggle()    
+
+
+print("Wait for Wifi %d" % wifi_wait_time)
+
+#wifi connect
+time.sleep(wifi_wait_time) 
+try:
+    print("Start Wifi")
+    wifi_connect(ssid,password)
+except OSError as e: 
+    print(e)
+    machine.reset()    
+        
+#Set RTC
+        
+time.sleep(1)
+try:
+    print("Set Rtc")
+    set_time()
+except OSError as e: 
+    print(e)
+    machine.reset()
     
+#OTA
+time.sleep(1)
+try:
+    print("Connect Github")
     
-    print('network status:%d' % wlan.status()) 
-    # wifi connect fail
-    if wlan.status() != 3:        
-        print('network connection failed')
-        machine.reset()
-        #raise RuntimeError('network connection failed')          
+    firmware_url = "https://github.com/luftqi/solar_picow6001/refs/heads/main/"
     
-    wdt = machine.WDT(timeout=8000)
-    #pg,pa,pp = power_read()
-    mqtt_message = "%s_%s_%s" %(pg,pa,pp)
-    print(mqtt_message)
+    ota_updater = OTAUpdater(firmware_url, "main.py")
+    ota_updater.download_and_install_update_if_available()
+except OSError as e:
+    print(e)
+    machine.reset()    
+        
+#MQTT connect
+time.sleep(1)
+try:
+    client = mqtt_connect()
+except OSError as e:
+    reconnect()
+
+
+while True:    
     
-    #mqtt_message= str(pg+"_"+pa+"_"+pp)
-    client.publish('pg_pa_pp', mqtt_message)      
-    wdt.feed()
+    gc.enable()      
+    print("Pizero2on / Pizero2off : %d / %d" %(pizero2_on ,pizero2_off))
+    current_time = machine.RTC().datetime()
+    #print(b"ping {}".format(current_time))
+    nowtimestamp = time.mktime(time.localtime())
     
+    if int(current_time[5]) >= pizero2_on and int(current_time[5]) <= pizero2_off:  #>= turn on
+               
+        # Stop/disable the RP2040 watchdog timer
+        # 0x40058000 = WATCHDOG_CTRL register, bit 30 is the ENABLE bit
+        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        #picow2 watch dog stop2
+        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)                
+        pin_6.on()
+        timer.init(freq = 2.5, mode=Timer.PERIODIC, callback=blink)#led toggle
+        
+        print ("Pizero on test")        
+        pizero2on()
+       
+    else:
+        pin_6.off()
+          
+    print("Pico sleep test")
+    picosleepandrestart(current_time,sleep_time,ssid,password,reset_hour,reset_minute)
+     
+    #pg ,pa ,pp= power_read()
+    print("Power data read done!!")     
+    pg =1
+    pa =1
+    pp =1
+    mqtt_message_out = "%s/%s/%s/%s" %(nowtimestamp,pg,pa,pp) 
+    print("MQTT message out : %s" %mqtt_message_out)
+       
+    
+    if 'data.txt' in os.listdir():  
+        with open('data.txt' , 'r' ,encoding = 'UTF-8') as f:
+            old_data = f.read()
+            #print(old_data)
+            lea = len(old_data)
+            new_data = '"'+old_data[1:(lea-1)]+mqtt_message_out+',"'
+            #print(new_data)
+            f.close()
+        with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
+            f.write(new_data)
+            f.close()
+            print("Update Data done!!")
+
+    else :
+        with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
+            f.write("")
+            f.close()
+            print("Data.txt create!!")
+   
     # Stop/disable the RP2040 watchdog timer
     # 0x40058000 = WATCHDOG_CTRL register, bit 30 is the ENABLE bit
+    #pico 2 w cannot stop watchdog
+    #picow watchdog stop
     machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
-    time.sleep(13)
-    
-    
-   
+    #picow2 watch dog stop2
+    #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+    time.sleep(23)
+    gc.disable()
