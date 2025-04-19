@@ -22,7 +22,7 @@ from simple import MQTTClient
 device = "6001"
 
 #wifi wait
-wifi_wait_time = 60
+wifi_wait_time = 30
 
 #pin
 global led
@@ -53,7 +53,7 @@ password = b'82767419'
 
 mqtt_server = '10.42.0.1'
 
-client_id = 'solarsdgs%s_1' %device
+client_id = b'solarsdgs%s_1' %device
 topic_pub = b'pg_pa_pp'
 topic_sub = b'pizero2onoff'
 mqttuser=b"solarsdgs%s" %device
@@ -200,12 +200,12 @@ def power_read():
 #NTP
 def set_time():
     # Get the external time reference
-    time.sleep(1)
+    time.sleep(0.5)
     NTP_QUERY = bytearray(48)
     NTP_QUERY[0] = 0x1B
     addr = socket.getaddrinfo(host, 123)[0][-1]   
     ss = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    time.sleep(1)
+    time.sleep(0.5)
 
     try:
         ss.settimeout(10)
@@ -235,7 +235,7 @@ def set_time():
 def wifi_connect(ssid,password):    
     
     wlan.connect(ssid,password)    
-    wait = 100
+    wait = 30
     while wait > 0:
         if wlan.status() < 0 or wlan.status() >= 3:
             print('network status:%d' % wlan.status()) 
@@ -264,6 +264,7 @@ def pizero2on():
     #publish MQTT message & reset data.txt               
     while True :
         current_time = machine.RTC().datetime()
+        print(current_time)
         nowtimestamp = time.mktime(time.localtime())
         if int(current_time[5]) >= pizero2_on and int(current_time[5]) <= pizero2_off:     
             #picow watchdog stop
@@ -271,7 +272,6 @@ def pizero2on():
             #picow watchdog stop
             #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
             #print(b"ping {}".format(current_time))
-            nowtimestamp = time.mktime(time.localtime())
             pg =2
             pa =2
             pp =2
@@ -335,20 +335,21 @@ def pizero2on():
         else:
             break
             #picow watchdog stop
-            machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
-            #picow2 watch dog stop2
-            #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
-            time.sleep(23)
+        
+        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        #picow2 watch dog stop2
+        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+        time.sleep(23)
 
 
-def picosleepandrestart(current_time,sleep_time,ssid,password,reset_hour,resst_minute):
+def picosleepandrestart(current_time):
     if int(current_time[4]) == sleep_hour and int(current_time[5]) == sleep_minute:     
         #picow watchdog stop
         machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
         #picow2 watch dog stop2
         #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
         
-        pin_6.off()        
+        pin_6.off()#sleep        
         timer.deinit()
         wlan.disconnect()
         wlan.active(False)
@@ -363,7 +364,7 @@ def picosleepandrestart(current_time,sleep_time,ssid,password,reset_hour,resst_m
             print(i)
             
             if i == sleep_time :
-                pin_6.off()
+                pin_6.on()#wakeup
                 time.sleep(60)
                 print("wake up")                
                 wlan = network.WLAN(network.STA_IF)
@@ -431,6 +432,7 @@ print("Wait for Wifi %d" % wifi_wait_time)
 
 #wifi connect
 time.sleep(wifi_wait_time) 
+
 try:
     print("Start Wifi")
     wifi_connect(ssid,password)
@@ -440,7 +442,7 @@ except OSError as e:
         
 #Set RTC
         
-time.sleep(1)
+time.sleep(0.5)
 try:
     print("Set Rtc")
     set_time()
@@ -449,12 +451,12 @@ except OSError as e:
     machine.reset()
     
 #OTA
-time.sleep(1)
+time.sleep(0.5)
 try:
     print("Connect Github")
     
     firmware_url = "https://github.com/luftqi/solar_picow6001/refs/heads/main/"
-    
+    #firmware_url = str("https://github.com/luftqi/solar_picow6001/refs/heads/main/")
     ota_updater = OTAUpdater(firmware_url, "main.py")
     ota_updater.download_and_install_update_if_available()
 except OSError as e:
@@ -462,7 +464,7 @@ except OSError as e:
     machine.reset()    
         
 #MQTT connect
-time.sleep(1)
+time.sleep(0.5)
 try:
     client = mqtt_connect()
 except OSError as e:
@@ -476,7 +478,7 @@ while True:
     current_time = machine.RTC().datetime()
     #print(b"ping {}".format(current_time))
     nowtimestamp = time.mktime(time.localtime())
-    
+    print(current_time)
     if int(current_time[5]) >= pizero2_on and int(current_time[5]) <= pizero2_off:  #>= turn on
                
         # Stop/disable the RP2040 watchdog timer
@@ -493,14 +495,14 @@ while True:
     else:
         pin_6.off()
           
-    print("Pico sleep test")
-    picosleepandrestart(current_time,sleep_time,ssid,password,reset_hour,reset_minute)
+    picosleepandrestart(current_time)
      
     #pg ,pa ,pp= power_read()
     print("Power data read done!!")     
     pg =1
     pa =1
     pp =1
+    wdt = machine.WDT(timeout=8000)
     mqtt_message_out = "%s/%s/%s/%s" %(nowtimestamp,pg,pa,pp) 
     print("MQTT message out : %s" %mqtt_message_out)
        
@@ -523,7 +525,7 @@ while True:
             f.write("")
             f.close()
             print("Data.txt create!!")
-   
+    wdt.feed()
     # Stop/disable the RP2040 watchdog timer
     # 0x40058000 = WATCHDOG_CTRL register, bit 30 is the ENABLE bit
     #pico 2 w cannot stop watchdog
