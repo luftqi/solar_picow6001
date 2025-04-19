@@ -262,10 +262,30 @@ def pizero2on():
              
     print("Pizero2 start work!")
     #publish MQTT message & reset data.txt               
+    print("Wait for Wifi %d" % wifi_wait_time)
+
+    #wifi connect
+    time.sleep(wifi_wait_time) 
+
+    try:
+        print("Start Wifi")
+        wifi_connect(ssid,password)
+    except OSError as e: 
+        print(e)
+        machine.reset()    
+    
+    #MQTT connect
+    time.sleep(0.5)
+    try:
+        client = mqtt_connect()
+    except OSError as e:
+        reconnect()
+    
     while True :
         current_time = machine.RTC().datetime()
         print(current_time)
-        nowtimestamp = time.mktime(time.localtime())
+        nowtimestamp = time.mktime(time.localtime())       
+        
         if int(current_time[5]) >= pizero2_on and int(current_time[5]) <= pizero2_off:     
             #picow watchdog stop
             machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
