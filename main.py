@@ -357,9 +357,9 @@ while True:
                
         # Stop/disable the RP2040 watchdog timer
         # 0x40058000 = WATCHDOG_CTRL register, bit 30 is the ENABLE bit
-        #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
         #picow2 watch dog stop2
-        machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)                
+        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)                
         pin_6.on()
         timer.init(freq = 2.5, mode=Timer.PERIODIC, callback=blink)#led toggle
         
@@ -473,9 +473,9 @@ while True:
         
             wdt.feed() 
             #picow watchdog stop
-            #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+            machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
             #picow2 watch dog stop2
-            machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+            #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
             time.sleep(23)
        
     else:
@@ -486,9 +486,9 @@ while True:
     wdt = machine.WDT(timeout=8000)      
     if int(current_time[3]) == sleep_hour and int(current_time[4]) == sleep_minute:     
         #picow watchdog stop
-        #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
         #picow2 watch dog stop2
-        machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
         
         pin_6.off()#sleep        
         timer.deinit()
@@ -526,9 +526,9 @@ while True:
     #Picoreset            
     if int(current_time[3]) == reset_hour and int(current_time[4]) == reset_minute:   
         #picow watchdog stop
-        #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
         #picow2 watch dog stop2
-        machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
         time.sleep(55)
         machine.reset()   
 
@@ -566,11 +566,10 @@ while True:
     # 0x40058000 = WATCHDOG_CTRL register, bit 30 is the ENABLE bit
 
     #picow watchdog stop
-    #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+    machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
     #picow2 watch dog stop2
-    machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+    #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
     time.sleep(23)
     gc.disable()
     
      
-
