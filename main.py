@@ -3,6 +3,7 @@ import socket
 import urequests
 import time
 import utime
+import ntptime
 import gc
 import machine
 import struct
@@ -10,6 +11,7 @@ import math
 import os
 import ina226
 import ujson
+import select
 from time import sleep
 from struct import unpack
 from machine import Pin, I2C ,UART ,Timer
@@ -19,10 +21,10 @@ from simple import MQTTClient
 
 
 #device
-device = "6001"
+iot = "6001"
 
 #wifi wait
-wifi_wait_time = 30
+wifi_wait_time = 60
 
 #pin
 global led
@@ -44,84 +46,13 @@ wlan.active(True)
 wlan.config(pm = 0xa11140) # Diable powersave mode
 networks = wlan.scan()
 
-ssid = b'solarsdgs' 
+ssid = b'solarsdgs'+iot 
 password = b'82767419'
 #ssid = b'Agromeans' 
 #password = b'90339756'
+#ssid = b'LUFTQI' 
+#password = b'82767419'
 
-#MQTT publish
-
-mqtt_server = '10.42.0.1'
-
-client_id = b'solarsdgs%s_1' %device
-topic_pub = b'pg_pa_pp'
-topic_sub = b'pizero2onoff'
-mqttuser=b"solarsdgs%s" %device
-mqttpassword=b"82767419"
-topic_msg = b''
-
-def mqtt_connect():
-    client = MQTTClient(client_id, mqtt_server,user = mqttuser,password =mqttpassword, keepalive=3600)
-    try:
-        client.connect()
-        client.set_callback(sub_cb)
-    except:
-        pass
-    
-    print('Connected to %s MQTT Broker'%(mqtt_server))
-    return client
-
-def reconnect():
-    print('Failed to connect to the MQTT Broker. Reconnecting...')
-    time.sleep(1)
-    try:
-        client = MQTTClient(client_id, mqtt_server,user = mqttuser,password =mqttpassword, keepalive=3600)
-        client.disconnect()
-        time.sleep(1)
-        client.connect()
-        client.set_callback(sub_cb)
-    except:
-        pass
-    print('Connected to %s MQTT Broker'%(mqtt_server))
-    return client
-
-
-#MQTT sub
-def sub_cb(topic, msg):
-    #print("New message on topic {}".format(topic.decode('utf-8')))
-    
-    msg = msg.decode('utf-8')
-    print(msg)
-    msg = msg.split('_')
-    
-    global pizero2_on
-    global pizero2_off
-
-    pizero2_on = int(msg[0])
-    pizero2_off = int(msg[1])#轉int
-    
-    #防止大小錯誤
-    if pizero2_on <= pizero2_off :
-        pass
-    else :
-        pizero2_off2 = pizero2_on
-        pizero2_on2 =pizero2_onf
-        pizero2_on = pizero2_on2
-        pizero2_off = pizero2_off2
-    
-    print("Recieve Pizero2on %d" % pizero2_on)
-    print("Recieve Pizero2off %d" % pizero2_off)
-    
-    f1 = open("pizero2on.txt", "w")
-    f1.write("%d" % pizero2_on)
-    f1.close()  
-    f2 = open("pizero2off.txt", "w")
-    f2.write("%d" % pizero2_off)
-    f2.close()
-    global msgg  #判斷MQTT是否傳輸成功  成功則刪除掉DATA資料
-    msgg = ""
-    print("len(megg) : %d" % len(msgg))
-    
 
 #======================================
  
@@ -197,39 +128,22 @@ def power_read():
 
     return pg,pa,pp
 
-#NTP
-def set_time():
-    # Get the external time reference
-    time.sleep(0.5)
-    NTP_QUERY = bytearray(48)
-    NTP_QUERY[0] = 0x1B
-    addr = socket.getaddrinfo(host, 123)[0][-1]   
-    ss = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    time.sleep(0.5)
+rtc = machine.RTC()
+rtc.datetime((2000, 1, 1, 0, 0, 0, 00, 0))
+print(time.localtime())
+# (date(2000, 1, 1) - date(1900, 1, 1)).days * 24*60*60
+# (date(1970, 1, 1) - date(1900, 1, 1)).days * 24*60*60
+NTP_DELTA = 3155673600 if time.gmtime(0)[0] == 2000 else 2208988800
+# The NTP host can be configured at runtime by doing: ntptime.host = 'myhost.org'
+host = "clock.stdtime.gov.tw"
 
-    try:
-        ss.settimeout(10)
-        res = ss.sendto(NTP_QUERY, addr)
-        msg = ss.recv(48)
- 
-    finally:
-        ss.close()
-
-    #Set our internal time
-    val = struct.unpack("!I", msg[40:44])[0]
-    tm = val - NTP_DELTA    
-    t = time.gmtime(tm)
-    #print (t[3])
-    #t3 = t[3] + 8 #Taiwan UTC+8???
-    t3 = t[3]
-    t2 = t[2]
-    if t3 >= 24 :
-        t3 = t3 -24
-        t2 = t2 +1
-    else:
-        t3 = t3
-    print(t)
-    machine.RTC().datetime((t[0],t[1],t2,t[6]+1,t3,t[4],t[5],0))
+def set_time(hrs_offset=0):  # Local time offset in hrs relative to UTC
+    
+    ntptime.NTP_DELTA = NTP_DELTA
+    ntptime.host = host
+    ntptime.settime() 
+    now_time= time.localtime((time.time()+hrs_offset*3600))
+    rtc.datetime((now_time[0],now_time[1],now_time[2],now_time[6],now_time[3],now_time[4],now_time[5],now_time[7]))
 
 #wifi connect
 def wifi_connect(ssid,password):    
@@ -255,161 +169,103 @@ def wifi_connect(ssid,password):
         ip=wlan.ifconfig()[0]
         print('IP: ', ip)
 
-def pizero2on():
-    
-    global msgg,pa,pg,pp
-    msgg = "11"
-             
-    print("Pizero2 start work!")
-    #publish MQTT message & reset data.txt               
-    print("Wait for Wifi %d" % wifi_wait_time)
+#=====================================================================
 
-    #wifi connect
-    time.sleep(wifi_wait_time) 
+# MQTT Parameters
+#MQTT_SERVER = '10.247.134.2'
+MQTT_SERVER = '10.42.0.1'
+#MQTT_SERVER = '192.168.50.3'
+MQTT_PORT = 0
+MQTT_USER = b"solarsdgs"+iot
+MQTT_PASSWORD = b"82767419"
+MQTT_CLIENT_ID = b'solarsdgs'+iot+'_1'#must different id
+MQTT_KEEPALIVE = 7200
+MQTT_SSL = False   # set to False if using local Mosquitto MQTT broker
 
+topic_pub = b'pg_pa_pp'
+topic_sub = b'pizero2onoff'
+#topic_msg = b''
+
+def connect_mqtt():
     try:
-        print("Start Wifi")
-        wifi_connect(ssid,password)
-    except OSError as e: 
-        print(e)
-        machine.reset()    
-    
-    #MQTT connect
-    time.sleep(0.5)
+        client = MQTTClient(client_id=MQTT_CLIENT_ID,
+                            server=MQTT_SERVER,
+                            port=MQTT_PORT,
+                            user=MQTT_USER,
+                            password=MQTT_PASSWORD,
+                            keepalive=MQTT_KEEPALIVE)
+        client.connect()
+        return client
+    except Exception as e:
+        print('Error connecting to MQTT:', e)
+        raise  # Re-raise the exception to see the full traceback
+
+def reconnect_mqtt():
+    print('Failed to connect to the MQTT Broker. Reconnecting...')
+    time.sleep(1)
     try:
-        client = mqtt_connect()
-    except OSError as e:
-        reconnect()
+        client = MQTTClient(client_id=MQTT_CLIENT_ID,
+                            server=MQTT_SERVER,
+                            port=MQTT_PORT,
+                            user=MQTT_USER,
+                            password=MQTT_PASSWORD,
+                            keepalive=MQTT_KEEPALIVE)
+        client.disconnect()
+        time.sleep(1)
+        client.connect()
+    except:
+        pass
+    print('Connected to %s MQTT Broker'%(MQTT_SERVER))
+    return client
+
+def publish_mqtt(topic, value):
+    client.publish(topic, value)
+    print(topic)
+    print(value)
+    print("Publish to topic" ,topic)
+
+# Subcribe to MQTT topics
+def subscribe(client, topic):
+    client.subscribe(topic)
+    print('Subscribe to topic:', topic)
     
-    while True :
-        current_time = machine.RTC().datetime()
-        print(current_time)
-        nowtimestamp = time.mktime(time.localtime())       
-        
-        if int(current_time[5]) >= pizero2_on and int(current_time[5]) <= pizero2_off:     
-            #picow watchdog stop
-            machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
-            #picow watchdog stop
-            #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
-            #print(b"ping {}".format(current_time))
-            pg =2
-            pa =2
-            pp =2
-            #pg ,pa ,pp= power_read()
-            print("Power data read done!!")
-            mqtt_message_in = "%s/%s/%s/%s" %(nowtimestamp,pg,pa,pp)   
-  
-            # wifi connect fail hard restart
-            if wlan.status() != 3:        
-                #picow watchdog stop
-                machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
-                #picow2 watch dog stop2
-                #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
-                print("Network offline")
-                pin_6.off()
-                time.sleep(1)
-                pin_6.on()                    
-                time.sleep(90)
-                print("network hard restart")                
-                wlan = network.WLAN(network.STA_IF)
-                wlan.active(True)
-                wlan.config(pm = 0xa11140) # Diable powersave mode
-                time.sleep(0.5)
-                wifi_connect(ssid,password)      
- 
-            if 'data.txt' in os.listdir():  
-                with open('data.txt' , 'r' ,encoding = 'UTF-8') as f:
-                    old_data = f.read()
-                    print("Mqtt message in: %s" % mqtt_message_in)
-                    lea = len(old_data)
-                    new_data = '"'+old_data[1:(lea-1)]+mqtt_message_in+',"'
-                    #print(new_data)
-                    f.close()
-                    
-                with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
-                    f.write(new_data)
-                    try :
-                        client.publish(topic_pub, new_data)
-                        client.subscribe(topic_sub)
-                    except :
-                        pass
-                    
-                    print("Push mqtt done!!")                   
-                
-                print ("len(msgg) :%d "% len(msgg))  
-                    
-                if len(msgg)==0:     #test MQTT sucess than clear data                                                                
-                    with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
-                        f.write("")
-                        f.close()
-                        print("Data reset!!") 
-                        msgg =""
-                else :
-                        pass
-            else :
-                    with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
-                        f.write("")
-                        f.close()
-                        print("Data.txt create!!")
-                   
-        else:
-            break
-            #picow watchdog stop
-        
-        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
-        #picow2 watch dog stop2
-        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
-        time.sleep(23)
-
-
-def picosleepandrestart(current_time):
-    if int(current_time[4]) == sleep_hour and int(current_time[5]) == sleep_minute:     
-        #picow watchdog stop
-        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
-        #picow2 watch dog stop2
-        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
-        
-        pin_6.off()#sleep        
-        timer.deinit()
-        wlan.disconnect()
-        wlan.active(False)
-        wlan.deinit()
-        time.sleep(55)        
-        print("Start light sleep")
-
-        #soft counter & sleep
-        for i in range(0,sleep_time) :
-            i = i + 1
-            time.sleep(1)
-            print(i)
-            
-            if i == sleep_time :
-                pin_6.on()#wakeup
-                time.sleep(60)
-                print("wake up")                
-                wlan = network.WLAN(network.STA_IF)
-                wlan.active(True)
-                wlan.config(pm = 0xa11140) # Diable powersave mode
-                time.sleep(0.5)
-                try:
-                    wifi_connect(ssid,password)
-                    print("Start wifi")
-                except OSError as e: 
-                    print(e)
-                    machine.reset()
-                
-                time.sleep(1)
-                timer.init(freq = 2.5, mode=Timer.PERIODIC, callback=blink)
+# Callback function that runs when you receive a message on subscribed topic
+def my_callback(topic, message):
+    # Perform desired actions based on the subscribed topic and response
+    print('Received message on topic:', topic)
+    print('Response:', message)
+    # Check the content of the received message
+    message = message.decode('utf-8')
+    print(message)
+    msg = message.split('_')
     
-    print("Restart test")
-    #reset            
-    if int(current_time[4]) == reset_hour and int(current_time[5]) == reset_minute:   
-        #picow watchdog stop
-        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
-        #picow2 watch dog stop2
-        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
-        time.sleep(55)
-        machine.reset() 
+    global pizero2_on
+    global pizero2_off
+
+    pizero2_on = int(msg[0])
+    pizero2_off = int(msg[1])#轉int
+    
+    #防止大小錯誤
+    if pizero2_on <= pizero2_off :
+        pass
+    else :
+        pizero2_off2 = pizero2_on
+        pizero2_on2 =pizero2_onf
+        pizero2_on = pizero2_on                                                                    
+        pizero2_off = pizero2_off2
+    
+    print("Recieve Pizero2on %d" % pizero2_on)
+    print("Recieve Pizero2off %d" % pizero2_off)
+    
+    f1 = open("pizero2on.txt", "w")
+    f1.write("%d" % pizero2_on)
+    f1.close()  
+    f2 = open("pizero2off.txt", "w")
+    f2.write("%d" % pizero2_off)
+    f2.close()
+    global msgg  #判斷MQTT是否傳輸成功  成功則刪除掉DATA資料
+    msgg = ""
+    print("len(megg) : %d" % len(msgg))    
 
 
 #######################################main############################################
@@ -418,9 +274,6 @@ pg = 1
 pa = 1
 pp = 1
 old_data = "" 
-rtc = machine.RTC()
-NTP_DELTA = 2208988800
-host = "pool.ntp.org"
 
 #sleep from 19:00 to 18:00
 sleep_hour = 19 
@@ -461,68 +314,231 @@ except OSError as e:
     machine.reset()    
         
 #Set RTC
-        
 time.sleep(0.5)
-try:
-    print("Set Rtc")
-    set_time()
-except OSError as e: 
-    print(e)
+for i in range(60):
+    try :
+        print("Set NTP & RTC")
+        set_time(8)
+        
+        break
+    except OSError as e:
+        print(e)
+        print("Waiting NTP connection")
+        time.sleep(1)
+else:
     machine.reset()
     
-#OTA
-time.sleep(0.5)
+#ota
+     
+time.sleep(2)
+print("Connect Github OTA")
+firmware_url = f"https://github.com/luftqi/solar_picow{iot}/refs/heads/main/"
+print(firmware_url)
 try:
-    print("Connect Github")
-    
-    firmware_url = "https://github.com/luftqi/solar_picow6001/refs/heads/main/"
-    #firmware_url = str("https://github.com/luftqi/solar_picow6001/refs/heads/main/")
     ota_updater = OTAUpdater(firmware_url, "main.py")
     ota_updater.download_and_install_update_if_available()
 except OSError as e:
     print(e)
-    machine.reset()    
-        
-#MQTT connect
-time.sleep(0.5)
-try:
-    client = mqtt_connect()
-except OSError as e:
-    reconnect()
-
+    pass
 
 while True:    
     
-    gc.enable()      
+    gc.enable()
+    gc.collect()
     print("Pizero2on / Pizero2off : %d / %d" %(pizero2_on ,pizero2_off))
-    current_time = machine.RTC().datetime()
+    print(time.localtime())    
+    current_time = time.localtime()
     #print(b"ping {}".format(current_time))
-    nowtimestamp = time.mktime(time.localtime())
-    print(current_time)
-    if int(current_time[5]) >= pizero2_on and int(current_time[5]) <= pizero2_off:  #>= turn on
+    #Python & MIcropython mktime is different
+    nowtimestamp = "%s_%s_%s_%s_%s_%s" %(current_time[0],current_time[1],current_time[2],current_time[3],current_time[4],current_time[5])
+    #nowtimestamp = int(time.mktime(current_time))-28800
+        
+    if int(current_time[4]) >= pizero2_on and int(current_time[4]) <= pizero2_off:  #>= turn on
                
         # Stop/disable the RP2040 watchdog timer
         # 0x40058000 = WATCHDOG_CTRL register, bit 30 is the ENABLE bit
-        machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
         #picow2 watch dog stop2
-        #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)                
+        machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)                
         pin_6.on()
         timer.init(freq = 2.5, mode=Timer.PERIODIC, callback=blink)#led toggle
         
+        if wlan.isconnected() == False:
+            print("Wait for Wifi %d" % wifi_wait_time)
+            #wifi connect
+            time.sleep(wifi_wait_time) 
+        
+            try:
+                print("Start Wifi")
+                wifi_connect(ssid,password)
+            except OSError as e: 
+                print(e)
+                machine.reset()
+            
         print ("Pizero on test")        
-        pizero2on()
+        
+        time.sleep(1)
+        for i in range(60):
+            try :
+                print("MQTT connect")
+                client = connect_mqtt()
+                client.set_callback(my_callback)
+                subscribe(client, topic_sub)      
+                break
+            except OSError as e:
+                print(e)
+                print(wlan.status())
+                print("Waiting MQTT reconnection")
+                time.sleep(1)
+            else:
+                machine.reset()
+        
+        while True:
+            current_time = time.localtime()
+            #print(b"ping {}".format(current_time))
+            #Python & MIcropython mktime is different
+            #nowtimestamp = int(time.mktime(current_time))-28800 
+            nowtimestamp = "%s_%s_%s_%s_%s_%s" %(current_time[0],current_time[1],current_time[2],current_time[3],current_time[4],current_time[5])        
+            wdt = machine.WDT(timeout=8000)
+            
+            if int(current_time[4]) >= pizero2_on and int(current_time[4]) <= pizero2_off:     
+                pg ,pa ,pp= power_read()
+                #pg =100
+                #pa =300
+                #pp =300
+                mqtt_message_in = "%s/%s/%s/%s" %(nowtimestamp,pg,pa,pp)   
+                client.check_msg()
+                # wifi connect fail hard restart
+                
+                if wlan.status() != 3:        
+                    
+                    print("Network offline")
+                    timer.deinit()
+                    wlan.disconnect()
+                    wlan.active(False)
+                    wlan.deinit()
+                    time.sleep(58)
+                    print("network hard restart")                
+                    wlan = network.WLAN(network.STA_IF)
+                    wlan.active(True)
+                    wlan.config(pm = 0xa11140) # Diable powersave mode
+                    time.sleep(0.5)
+                    wifi_connect(ssid,password)      
+            
+                if 'data.txt' in os.listdir():  
+                    with open('data.txt' , 'r' ,encoding = 'UTF-8') as f:
+                        old_data = f.read()
+                        print("Mqtt message in: %s" % mqtt_message_in)
+                        lea = len(old_data)
+                        new_data = '"'+old_data[1:(lea-1)]+mqtt_message_in+',"'
+                        #print(new_data)
+                        f.close()
+                    
+                    with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
+                        f.write(new_data)
+                        f.close()  
+                  
+                    print ("len(msgg) :%d "% len(msgg))  
+                    
+                    if len(msgg)==0:     #test MQTT sucess than clear data                                                                
+                        with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
+                            f.write("")
+                            f.close()
+                            print("Data reset!!") 
+                            msgg ="11"
+                    else :
+                        pass
+                else :
+                    with open('data.txt' , 'w' , encoding = 'UTF-8') as f:                      
+                        f.write("")
+                        f.close()
+                        print("Data.txt create!!")                   
+            else:
+                pin_6.off()
+                break
+
+            
+            try :
+                # Publish as MQTT payload
+                time.sleep(1)                
+                publish_mqtt(topic_pub, new_data)
+            except OSError as e:
+                print("push MQTT fail")
+                print(wlan.status())
+                print(e)
+                reconnect_mqtt()
+                pass 
+            
+            time.sleep(1) # 如果沒有sleep  MQTT publish 會異常
+        
+            wdt.feed() 
+            #picow watchdog stop
+            #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+            #picow2 watch dog stop2
+            machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+            time.sleep(23)
        
     else:
         pin_6.off()
-          
-    picosleepandrestart(current_time)
-     
-    #pg ,pa ,pp= power_read()
+        print("Pizero2 off")
+    
+    #PICO Sleep
+    wdt = machine.WDT(timeout=8000)      
+    if int(current_time[3]) == sleep_hour and int(current_time[4]) == sleep_minute:     
+        #picow watchdog stop
+        #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        #picow2 watch dog stop2
+        machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+        
+        pin_6.off()#sleep        
+        timer.deinit()
+        wlan.disconnect()
+        wlan.active(False)
+        wlan.deinit()
+        time.sleep(55)        
+        print("Start light sleep")
+
+        #soft counter & sleep
+        for i in range(0,sleep_time) :
+            time.sleep(1)
+            print(i)
+            
+            if i == sleep_time :
+                pin_6.on()#wakeup
+                time.sleep(60)
+                print("wake up")                
+                wlan = network.WLAN(network.STA_IF)
+                wlan.active(True)
+                wlan.config(pm = 0xa11140) # Diable powersave mode
+                time.sleep(0.5)
+                try:
+                    wifi_connect(ssid,password)
+                    print("Start wifi")
+                except OSError as e: 
+                    print(e)
+                    machine.reset()
+                
+                time.sleep(1)
+                timer.init(freq = 2.5, mode=Timer.PERIODIC, callback=blink)
+    
+    print("Restart test")
+    
+    #Picoreset            
+    if int(current_time[3]) == reset_hour and int(current_time[4]) == reset_minute:   
+        #picow watchdog stop
+        #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+        #picow2 watch dog stop2
+        machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+        time.sleep(55)
+        machine.reset()   
+
+
+    pg ,pa ,pp= power_read()
     print("Power data read done!!")     
-    pg =1
-    pa =1
-    pp =1
-    wdt = machine.WDT(timeout=8000)
+    #pg =10
+    #pa =20
+    #pp =20
+    pin_6.off()
     mqtt_message_out = "%s/%s/%s/%s" %(nowtimestamp,pg,pa,pp) 
     print("MQTT message out : %s" %mqtt_message_out)
        
@@ -548,10 +564,13 @@ while True:
     wdt.feed()
     # Stop/disable the RP2040 watchdog timer
     # 0x40058000 = WATCHDOG_CTRL register, bit 30 is the ENABLE bit
-    #pico 2 w cannot stop watchdog
+
     #picow watchdog stop
-    machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
+    #machine.mem32[0x40058000] = machine.mem32[0x40058000] & ~(1<<30)
     #picow2 watch dog stop2
-    #machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
+    machine.mem32[0x400d8000] = machine.mem32[0x400d8000] & ~(1<<30)
     time.sleep(23)
     gc.disable()
+    
+     
+
